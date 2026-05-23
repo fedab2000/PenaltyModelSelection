@@ -22,9 +22,13 @@ st.set_page_config(
 
 st.title("Ridge vs Lasso vs Elastic Net Regression")
 
+st.info(
+    "Change the sidebar settings and the models will automatically retrain."
+)
+
 st.write("""
-This Streamlit app compares Ridge, Lasso, and Elastic Net regression models
-using synthetic regression data.
+This Streamlit app compares Ridge, Lasso, and Elastic Net regression
+models using synthetic regression data.
 """)
 
 # ---------------------------------------------------
@@ -109,11 +113,17 @@ elastic_l1_ratios = st.sidebar.multiselect(
 )
 
 # ---------------------------------------------------
-# DATA GENERATION
+# GENERATE SYNTHETIC DATA
 # ---------------------------------------------------
 
 @st.cache_data
-def generate_data():
+def generate_data(
+    n_samples,
+    n_features,
+    n_informative,
+    noise,
+    random_state
+):
 
     X, y, true_coef = make_regression(
         n_samples=n_samples,
@@ -121,12 +131,29 @@ def generate_data():
         n_informative=n_informative,
         noise=noise,
         coef=True,
-        random_state=int(random_state)
+        random_state=random_state
     )
+
+    # Add correlated predictors
+    if n_features >= 3:
+        X[:, 1] = X[:, 0] + np.random.normal(
+            0,
+            0.1,
+            size=X.shape[0]
+        )
+
+        X[:, 2] = X[:, 0] + np.random.normal(
+            0,
+            0.1,
+            size=X.shape[0]
+        )
 
     feature_names = [f"X{i+1}" for i in range(n_features)]
 
-    X = pd.DataFrame(X, columns=feature_names)
+    X = pd.DataFrame(
+        X,
+        columns=feature_names
+    )
 
     return X, y, true_coef, feature_names
 
@@ -134,13 +161,23 @@ def generate_data():
 # TRAIN MODELS
 # ---------------------------------------------------
 
-def train_models(X, y):
+@st.cache_data
+def train_models(
+    X,
+    y,
+    test_size,
+    random_state,
+    ridge_alphas,
+    lasso_alphas,
+    elastic_alphas,
+    elastic_l1_ratios
+):
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
         test_size=test_size,
-        random_state=int(random_state)
+        random_state=random_state
     )
 
     models = {
@@ -189,15 +226,26 @@ def train_models(X, y):
 
         y_pred = grid.predict(X_test)
 
-        coef_values = grid.best_estimator_.named_steps["model"].coef_
+        coef_values = grid.best_estimator_\
+            .named_steps["model"].coef_
 
-        nonzero_count = np.sum(np.abs(coef_values) > 1e-8)
+        nonzero_count = np.sum(
+            np.abs(coef_values) > 1e-8
+        )
 
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        rmse = np.sqrt(
+            mean_squared_error(y_test, y_pred)
+        )
 
-        mae = mean_absolute_error(y_test, y_pred)
+        mae = mean_absolute_error(
+            y_test,
+            y_pred
+        )
 
-        r2 = r2_score(y_test, y_pred)
+        r2 = r2_score(
+            y_test,
+            y_pred
+        )
 
         results.append({
             "Model": name,
@@ -220,15 +268,34 @@ def train_models(X, y):
     return results_df, coef_df
 
 # ---------------------------------------------------
-# RUN PIPELINE
+# GENERATE DATA
 # ---------------------------------------------------
 
-X, y, true_coef, feature_names = generate_data()
-
-results_df, coef_df = train_models(X, y)
+X, y, true_coef, feature_names = generate_data(
+    n_samples,
+    n_features,
+    n_informative,
+    noise,
+    int(random_state)
+)
 
 # ---------------------------------------------------
-# DATA SUMMARY
+# TRAIN MODELS
+# ---------------------------------------------------
+
+results_df, coef_df = train_models(
+    X,
+    y,
+    test_size,
+    int(random_state),
+    tuple(ridge_alphas),
+    tuple(lasso_alphas),
+    tuple(elastic_alphas),
+    tuple(elastic_l1_ratios)
+)
+
+# ---------------------------------------------------
+# DATASET SUMMARY
 # ---------------------------------------------------
 
 st.subheader("Dataset Summary")
@@ -246,7 +313,10 @@ col4.metric("Noise", noise)
 
 st.subheader("Model Results")
 
-st.dataframe(results_df)
+st.dataframe(
+    results_df,
+    use_container_width=True
+)
 
 # ---------------------------------------------------
 # AUTOMATIC INTERPRETATION
@@ -274,6 +344,22 @@ elastic_vars = results_df.loc[
     results_df["Model"] == "Elastic Net",
     "Nonzero Coefficients"
 ].values[0]
+
+# Best balance calculation
+best_rmse = results_df["RMSE"].min()
+
+results_df["RMSE Gap From Best"] = (
+    results_df["RMSE"] - best_rmse
+)
+
+balanced_candidates = results_df[
+    results_df["RMSE Gap From Best"]
+    <= 0.05 * best_rmse
+]
+
+best_balance = balanced_candidates.sort_values(
+    by=["Nonzero Coefficients", "RMSE"]
+).iloc[0]
 
 st.subheader("Automatic Interpretation")
 
@@ -313,6 +399,11 @@ else:
         f"Ridge kept {ridge_vars} variables."
     )
 
+st.write(
+    f"Best balance between accuracy and interpretability: "
+    f"{best_balance['Model']}"
+)
+
 # ---------------------------------------------------
 # RMSE PLOT
 # ---------------------------------------------------
@@ -327,6 +418,8 @@ ax1.bar(
 )
 
 ax1.set_ylabel("Test RMSE")
+
+ax1.set_title("RMSE Comparison")
 
 st.pyplot(fig1)
 
@@ -345,6 +438,8 @@ ax2.bar(
 
 ax2.set_ylabel("Test R²")
 
+ax2.set_title("R² Comparison")
+
 st.pyplot(fig2)
 
 # ---------------------------------------------------
@@ -362,6 +457,8 @@ ax3.bar(
 
 ax3.set_ylabel("Number of Variables")
 
+ax3.set_title("Variables Kept")
+
 st.pyplot(fig3)
 
 # ---------------------------------------------------
@@ -370,7 +467,8 @@ st.pyplot(fig3)
 
 st.subheader("Coefficient Comparison")
 
-top_features = coef_df.abs().max(axis=1)\
+top_features = coef_df.abs()\
+    .max(axis=1)\
     .sort_values(ascending=False)\
     .head(15)\
     .index
@@ -384,6 +482,8 @@ coef_df.loc[top_features].plot(
 
 ax4.set_ylabel("Coefficient Value")
 
+ax4.set_title("Top 15 Coefficients")
+
 plt.tight_layout()
 
 st.pyplot(fig4)
@@ -394,7 +494,10 @@ st.pyplot(fig4)
 
 st.subheader("Coefficient Table")
 
-st.dataframe(coef_df)
+st.dataframe(
+    coef_df,
+    use_container_width=True
+)
 
 # ---------------------------------------------------
 # FOOTER
